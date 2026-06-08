@@ -1,0 +1,47 @@
+{
+  "name": "@queueflow/sdk",
+  "version": "0.1.0",
+  "description": "Ergonomic TypeScript/JavaScript client for QueueFlow — a PostgreSQL/PGMQ-native distributed job queue and workflow engine.",
+  "license": "MIT",
+  "homepage": "https://queueflow.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/queueflow/queueflow-sdk-nodejs.git"
+  },
+  "keywords": [
+    "queue",
+    "jobs",
+    "workflow",
+    "dag",
+    "postgres",
+    "pgmq",
+    "queueflow",
+    "background-jobs"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepare": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

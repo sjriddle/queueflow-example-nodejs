@@ -1,0 +1,18 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# local env — keep .env.example tracked
+.env
+.env.*
+!.env.example
+
+# runtime artifacts (from `make up` / the Makefile)
+*.log
+.server.pid
+
+# OS / editor
+.DS_Store
