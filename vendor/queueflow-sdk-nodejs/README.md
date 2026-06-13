@@ -1,7 +1,7 @@
 # @queueflow/sdk
 
 Ergonomic TypeScript/JavaScript client for [QueueFlow](https://queueflow.dev) — a
-PostgreSQL/PGMQ-native distributed job queue and workflow engine.
+PostgreSQL-native distributed job queue and workflow engine.
 
 - **Typed end-to-end** — request/response shapes mirror the server's OpenAPI 3.1 spec.
 - **Ergonomic** — `qf.jobs.create({ task, payload })`, a `waitFor()` poller, and a workflow builder DSL.

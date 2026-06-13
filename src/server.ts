@@ -13,7 +13,7 @@ import express, {
   type Response,
 } from "express";
 import { ApiError, NotFoundError, wf } from "@queueflow/sdk";
-import { qf, TASKS } from "./queueflow.js";
+import { qf, APP_QUEUE, TASKS } from "./queueflow.js";
 
 export function createApp() {
   const app = express();
@@ -41,10 +41,16 @@ export function createApp() {
 
       // ... here you'd persist the user to your own database ...
 
-      // Offload the slow part (sending mail) to QueueFlow.
+      // Offload the slow part (sending mail) to QueueFlow. The job goes to
+      // APP_QUEUE, where this app's own TypeScript worker (src/worker.ts)
+      // executes it. The idempotency key makes retries (and double-submits)
+      // safe: re-POSTing the same email returns the original job instead of
+      // sending a second welcome mail.
       const jobId = await qf.jobs.enqueue({
         task: TASKS.sendWelcomeEmail,
         payload: { to: email, name: name ?? null, template: "welcome" },
+        queue: APP_QUEUE,
+        idempotencyKey: `welcome:${email}`,
         maxRetries: 5,
         timeout: 30,
       });
@@ -53,6 +59,7 @@ export function createApp() {
         message: `signed up ${email}; welcome email queued`,
         jobId,
         statusUrl: `/jobs/${jobId}`,
+        streamUrl: `/jobs/${jobId}/stream`,
       });
     }),
   );
@@ -71,6 +78,48 @@ export function createApp() {
         createdAt: job.created_at,
         completedAt: job.completed_at ?? null,
       });
+    }),
+  );
+
+  // --- Live job status over Server-Sent Events. ------------------------------
+  // curl -N localhost:3000/jobs/<id>/stream
+  // Proxies the engine's `GET /api/v1/jobs/{id}/events` stream via the SDK's
+  // `qf.jobs.watch()`: one event per status transition, ends once terminal.
+  app.get(
+    "/jobs/:id/stream",
+    asyncHandler(async (req, res) => {
+      // 404 cleanly before any SSE bytes go out.
+      await qf.jobs.get(req.params.id);
+
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      });
+      res.flushHeaders();
+
+      const stop = new AbortController();
+      req.on("close", () => stop.abort());
+      try {
+        for await (const job of qf.jobs.watch(req.params.id, {
+          signal: stop.signal,
+        })) {
+          const update = {
+            id: job.id,
+            status: job.status,
+            result: job.result ?? null,
+            error: job.error_message ?? null,
+          };
+          res.write(`event: status\ndata: ${JSON.stringify(update)}\n\n`);
+        }
+      } catch (err) {
+        // Client hung up (abort) => nothing to report. Anything else: tell
+        // the client before closing; headers are already committed.
+        if (!stop.signal.aborted) {
+          res.write(`event: error\ndata: ${JSON.stringify({ error: String(err) })}\n\n`);
+        }
+      }
+      res.end();
     }),
   );
 

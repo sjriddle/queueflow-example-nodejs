@@ -9,6 +9,7 @@ export {
   JobsResource,
   WorkflowsResource,
   SystemResource,
+  WorkerResource,
 } from "./client.js";
 export type {
   QueueFlowOptions,

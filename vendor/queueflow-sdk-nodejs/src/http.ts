@@ -27,6 +27,8 @@ export interface HttpOptions {
 export interface RequestOptions {
   query?: Record<string, string | number | boolean | undefined | null>;
   body?: unknown;
+  /** Extra headers for this single request (e.g. `Idempotency-Key`). */
+  headers?: Record<string, string>;
   /** Override the default timeout for this call. */
   timeoutMs?: number;
   /** Whether this call is safe to retry. Defaults to true for GET. */
@@ -74,6 +76,60 @@ export class Http {
     await this.request<void>("POST", path, { ...opts, expectNoContent: true });
   }
 
+  /**
+   * Open a Server-Sent Events stream and yield its events. Minimal parser:
+   * handles `event:`/`data:` fields and comment keep-alives; ends when the
+   * server closes the stream or `signal` aborts.
+   */
+  async *sse(
+    path: string,
+    opts: { signal?: AbortSignal } = {},
+  ): AsyncGenerator<{ event: string; data: string }> {
+    const url = this.buildUrl(path);
+    const res = await this.fetchImpl(url, {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        accept: "text/event-stream",
+        ...this.headers,
+      },
+      signal: opts.signal,
+    });
+    if (!res.ok) throw await this.toApiError(res, "GET", path);
+    if (!res.body) return;
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let event = "message";
+    let data: string[] = [];
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, idx).replace(/\r$/, "");
+          buffer = buffer.slice(idx + 1);
+          if (line === "") {
+            // Blank line terminates one event.
+            if (data.length) yield { event, data: data.join("\n") };
+            event = "message";
+            data = [];
+          } else if (line.startsWith("event:")) {
+            event = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            data.push(line.slice(5).trimStart());
+          }
+          // Comment lines (":keep-alive") and other fields are ignored.
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -119,6 +175,7 @@ export class Http {
       authorization: `Bearer ${this.token}`,
       accept: "application/json",
       ...this.headers,
+      ...opts.headers,
     };
     const init: RequestInit = { method, headers, signal: controller.signal };
     if (opts.body !== undefined) {

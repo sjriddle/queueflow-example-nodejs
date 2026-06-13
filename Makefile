@@ -20,15 +20,16 @@ METRICS_PORT ?= 9090
 PORT         ?= 3000
 TOKEN        ?= dev
 PG_CONTAINER ?= qf-pg
-PG_IMAGE     ?= quay.io/tembo/pg16-pgmq:latest
+PG_IMAGE     ?= postgres:16-alpine
 
 QUEUEFLOW_URL ?= http://localhost:$(API_PORT)
 DATABASE_URL  ?= postgres://postgres:postgres@localhost:$(PG_PORT)/postgres
 
 # The SDK is vendored into this repo. The QueueFlow engine (Rust) lives in its
-# own repo — point CORE_DIR at a local checkout of queueflow-core, or skip
-# the `up`/`server-up` targets and run the engine yourself.
-CORE_DIR ?= ../queueflow-core
+# own repo — point CORE_DIR at a local checkout of queueflow-core (checked out
+# here as queueflow-core-rs), or skip the `up`/`server-up` targets and run the
+# engine yourself.
+CORE_DIR ?= ../queueflow-core-rs
 SDK_DIR  ?= ./vendor/queueflow-sdk-nodejs
 
 SERVER_PID := .server.pid
@@ -58,7 +59,7 @@ up: pg-up server-up ## Start Postgres + the QueueFlow server (background)
 # --- Postgres --------------------------------------------------------------
 
 .PHONY: pg-up
-pg-up: ## Start the PGMQ Postgres container
+pg-up: ## Start the Postgres container (any plain PostgreSQL 13+ works)
 	@if [ -n "$$(docker ps -q -f name=^/$(PG_CONTAINER)$$)" ]; then \
 		echo "==> Postgres '$(PG_CONTAINER)' already running"; \
 	else \

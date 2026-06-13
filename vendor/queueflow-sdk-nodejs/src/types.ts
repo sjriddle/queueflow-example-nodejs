@@ -67,6 +67,17 @@ export interface Job {
   config: JobConfig;
   status: JobStatus;
   created_at: string;
+  /**
+   * When the job becomes claimable: `created_at` for immediate jobs, the
+   * requested `run_at` for scheduled jobs, the next backoff instant while
+   * retrying.
+   */
+  scheduled_at: string;
+  /**
+   * How many times this job has been claimed by a worker. Greater than
+   * `retry_count + 1` means a lease expired without a report (worker crash).
+   */
+  delivery_count: number;
   retry_count: number;
   payload?: JsonObject;
   result?: JsonObject | null;
@@ -79,6 +90,19 @@ export interface Job {
   workflow_id?: string | null;
   /** The owning workflow step's name (steps are addressed by name). */
   workflow_step_id?: string | null;
+  /** Client-supplied key that made this job's creation idempotent. */
+  idempotency_key?: string | null;
+}
+
+/** A job leased to a worker, with the token needed to report on it. */
+export interface LeasedJob {
+  job: Job;
+  /**
+   * Opaque, unguessable proof of lease ownership, regenerated on every claim;
+   * pass back on heartbeat/complete/fail. A stale token (the lease expired
+   * and the job was reclaimed) is rejected with a 409.
+   */
+  lease_token: string;
 }
 
 /** A node in a workflow DAG. Steps are addressed by their unique `name`. */
@@ -124,6 +148,8 @@ export interface CreateJobRequest {
   task_name: string;
   payload?: JsonObject;
   config?: JobConfigRequest | null;
+  /** Don't run before this instant (RFC 3339). */
+  run_at?: string;
 }
 
 export interface CreateBatchJobsRequest {
@@ -153,7 +179,8 @@ export interface CreateWorkflowResponse {
 }
 
 export interface Page<T> {
-  total: number;
+  /** Exact total; only present when the request set `include_total=true`. */
+  total?: number;
   limit: number;
   offset: number;
   has_more: boolean;
@@ -176,6 +203,52 @@ export interface WorkflowDiagramResponse {
 
 export interface TasksResponse {
   tasks: string[];
+}
+
+// --- Remote worker protocol --------------------------------------------------
+
+export interface LeaseJobsRequest {
+  /** Maximum jobs to lease in one call (1..=100, default 1). */
+  max_jobs?: number;
+  /** Lease duration in seconds (1..=3600, default 30). Heartbeat to extend. */
+  lease_secs?: number;
+  /** Long-poll wait when the queue is empty, in seconds (0..=30, default 0). */
+  wait_secs?: number;
+}
+
+export interface LeaseJobsResponse {
+  jobs: LeasedJob[];
+}
+
+export interface CompleteJobRequest {
+  /** The lease token returned by the lease call. */
+  lease_token: string;
+  /** Handler result, recorded on the job and merged into workflow context. */
+  result?: JsonObject;
+}
+
+export interface FailJobRequest {
+  /** The lease token returned by the lease call. */
+  lease_token: string;
+  error: string;
+  /** Whether the engine may retry (default true). */
+  retryable?: boolean;
+}
+
+export interface HeartbeatRequest {
+  /** The lease token returned by the lease call. */
+  lease_token: string;
+  /** New lease duration in seconds, measured from now (1..=3600). */
+  extend_secs: number;
+}
+
+export interface HeartbeatResponse {
+  /**
+   * The job's current status. `running` means the lease was extended;
+   * anything else (e.g. `cancelled`) means it was not, and the worker should
+   * stop working on the job.
+   */
+  status: JobStatus;
 }
 
 export interface StatsSnapshot {

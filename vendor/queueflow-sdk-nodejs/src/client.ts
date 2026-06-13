@@ -12,9 +12,13 @@ import {
   type CreateWorkflowRequest,
   type CreateWorkflowResponse,
   type HealthStatus,
+  type HeartbeatResponse,
   type Job,
   type JobConfigRequest,
+  type JobStatus,
   type JsonObject,
+  type LeasedJob,
+  type LeaseJobsResponse,
   type ListJobsResponse,
   type ListWorkflowsResponse,
   type ReadyStatus,
@@ -41,6 +45,16 @@ export interface CreateJobInput {
   timeout?: number;
   /** Override the destination queue. */
   queue?: string;
+  /**
+   * Makes the create idempotent per tenant (sent as `Idempotency-Key`):
+   * retrying with the same key returns the original job, never a duplicate.
+   */
+  idempotencyKey?: string;
+  /**
+   * Don't run before this instant. The job is created immediately but stays
+   * invisible to workers until then.
+   */
+  runAt?: Date | string;
 }
 
 /** Filters for the list endpoints. */
@@ -51,6 +65,8 @@ export interface ListOptions {
   offset?: number;
   /** `"created_at ASC"` or `"created_at DESC"` (default DESC). */
   orderBy?: "created_at ASC" | "created_at DESC";
+  /** Include the exact `total` (an extra count query server-side). */
+  includeTotal?: boolean;
 }
 
 /** Options for the `waitFor` pollers. */
@@ -77,17 +93,32 @@ function toCreateJobRequest(input: CreateJobInput): CreateJobRequest {
   if (input.payload) req.payload = input.payload;
   const config = toJobConfigRequest(input);
   if (config) req.config = config;
+  if (input.runAt !== undefined) {
+    req.run_at =
+      input.runAt instanceof Date ? input.runAt.toISOString() : input.runAt;
+  }
   return req;
 }
 
-function listQuery(opts: ListOptions = {}): Record<string, string | number | undefined> {
+function listQuery(
+  opts: ListOptions = {},
+): Record<string, string | number | boolean | undefined> {
   return {
     status: opts.status,
     queue: opts.queue,
     limit: opts.limit,
     offset: opts.offset,
     order_by: opts.orderBy,
+    include_total: opts.includeTotal ? true : undefined,
   };
+}
+
+function idempotencyHeaders(
+  input: CreateJobInput,
+): Record<string, string> | undefined {
+  return input.idempotencyKey
+    ? { "idempotency-key": input.idempotencyKey }
+    : undefined;
 }
 
 /** Job lifecycle: enqueue, fetch, list, cancel, and wait for completion. */
@@ -96,16 +127,16 @@ export class JobsResource {
 
   /** Enqueue a job and return its freshly-created record. */
   async create(input: CreateJobInput): Promise<Job> {
-    const { job_id } = await this.http.post<CreateJobResponse>("/api/v1/jobs", {
-      body: toCreateJobRequest(input),
-    });
-    return this.get(job_id);
+    return this.get(await this.enqueue(input));
   }
 
   /** Enqueue without a follow-up fetch; returns just the new job id. */
   async enqueue(input: CreateJobInput): Promise<string> {
     const { job_id } = await this.http.post<CreateJobResponse>("/api/v1/jobs", {
       body: toCreateJobRequest(input),
+      headers: idempotencyHeaders(input),
+      // A keyed create is replay-safe server-side, so it may be retried.
+      idempotent: input.idempotencyKey !== undefined,
     });
     return job_id;
   }
@@ -142,6 +173,186 @@ export class JobsResource {
       "job",
       opts,
     );
+  }
+
+  /**
+   * Stream a job's status changes as they happen (Server-Sent Events from
+   * `GET /api/v1/jobs/{id}/events`). Yields the full job on every status
+   * transition and returns once the job is terminal.
+   *
+   * ```ts
+   * for await (const job of qf.jobs.watch(id)) console.log(job.status);
+   * ```
+   */
+  async *watch(id: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<Job> {
+    const stream = this.http.sse(
+      `/api/v1/jobs/${encodeURIComponent(id)}/events`,
+      opts,
+    );
+    for await (const event of stream) {
+      if (event.event !== "status" || !event.data) continue;
+      const job = JSON.parse(event.data) as Job;
+      yield job;
+      if (TERMINAL_JOB_STATUSES.has(job.status)) return;
+    }
+  }
+}
+
+/**
+ * The remote worker protocol: lease jobs, heartbeat while running, report
+ * completion/failure. This is how handlers written in TypeScript execute
+ * QueueFlow jobs without living in the Rust server binary; retries, the
+ * dead-letter queue, and workflow advancement all stay server-side.
+ */
+export class WorkerResource {
+  constructor(private readonly http: Http) {}
+
+  /**
+   * Lease up to `maxJobs` jobs from `queue` for `leaseSecs`, long-polling up
+   * to `waitSecs` when the queue is empty. Returns `[]` if nothing arrived.
+   */
+  lease(
+    queue: string,
+    opts: { maxJobs?: number; leaseSecs?: number; waitSecs?: number } = {},
+  ): Promise<LeasedJob[]> {
+    return this.http
+      .post<LeaseJobsResponse>(
+        `/api/v1/queues/${encodeURIComponent(queue)}/lease`,
+        {
+          body: {
+            max_jobs: opts.maxJobs,
+            lease_secs: opts.leaseSecs,
+            wait_secs: opts.waitSecs,
+          },
+          // Leasing is replay-safe: a lost response only delays redelivery.
+          idempotent: true,
+          // Long polls must outlive the default request timeout.
+          timeoutMs: ((opts.waitSecs ?? 0) + 35) * 1_000,
+        },
+      )
+      .then((res) => res.jobs);
+  }
+
+  /**
+   * Extend a lease so a still-running job is not reaped. Returns the job's
+   * current status: `running` means the lease was extended; anything else
+   * (e.g. `cancelled` mid-run) means it was not, and the worker should stop
+   * working on the job.
+   */
+  heartbeat(lease: LeasedJob, extendSecs: number): Promise<JobStatus> {
+    return this.http
+      .post<HeartbeatResponse>(
+        `/api/v1/jobs/${encodeURIComponent(lease.job.id)}/heartbeat`,
+        {
+          body: {
+            lease_token: lease.lease_token,
+            extend_secs: extendSecs,
+          },
+          idempotent: true,
+        },
+      )
+      .then((res) => res.status);
+  }
+
+  /** Report success. Replaying against a finished job is a server-side no-op. */
+  complete(lease: LeasedJob, result: JsonObject = {}): Promise<void> {
+    return this.http.postNoContent(
+      `/api/v1/jobs/${encodeURIComponent(lease.job.id)}/complete`,
+      {
+        body: { lease_token: lease.lease_token, result },
+        idempotent: true,
+      },
+    );
+  }
+
+  /** Report failure; the server applies the job's retry/dead-letter policy. */
+  fail(
+    lease: LeasedJob,
+    error: string,
+    opts: { retryable?: boolean } = {},
+  ): Promise<void> {
+    return this.http.postNoContent(
+      `/api/v1/jobs/${encodeURIComponent(lease.job.id)}/fail`,
+      {
+        body: {
+          lease_token: lease.lease_token,
+          error,
+          retryable: opts.retryable ?? true,
+        },
+        idempotent: true,
+      },
+    );
+  }
+
+  /**
+   * Run a worker loop: lease, dispatch to `handlers` by task name, heartbeat
+   * while the handler runs, and report the outcome. Resolves when `signal`
+   * aborts. Handlers should be idempotent (delivery is at-least-once).
+   *
+   * ```ts
+   * await qf.worker.run("default", {
+   *   "resize-image": async (job) => ({ resized: true }),
+   * }, { signal: controller.signal });
+   * ```
+   */
+  async run(
+    queue: string,
+    handlers: Record<string, (job: Job) => Promise<JsonObject>>,
+    opts: { leaseSecs?: number; waitSecs?: number; signal?: AbortSignal } = {},
+  ): Promise<void> {
+    const leaseSecs = opts.leaseSecs ?? 30;
+    const waitSecs = opts.waitSecs ?? 20;
+    while (!opts.signal?.aborted) {
+      let leases: LeasedJob[];
+      try {
+        leases = await this.lease(queue, { maxJobs: 1, leaseSecs, waitSecs });
+      } catch {
+        await sleep(1_000, opts.signal);
+        continue;
+      }
+      for (const lease of leases) {
+        await this.runOne(lease, handlers, leaseSecs);
+      }
+    }
+  }
+
+  private async runOne(
+    lease: LeasedJob,
+    handlers: Record<string, (job: Job) => Promise<JsonObject>>,
+    leaseSecs: number,
+  ): Promise<void> {
+    const handler = handlers[lease.job.task_name];
+    if (!handler) {
+      await this.fail(lease, `no remote handler for task '${lease.job.task_name}'`, {
+        retryable: false,
+      });
+      return;
+    }
+    // Heartbeat at half the lease interval while the handler runs. The
+    // heartbeat doubles as a cancellation channel: a non-running status (or a
+    // 409 lost-lease) means the server owns the outcome, so stop reporting.
+    let leaseLost = false;
+    const ticker = setInterval(() => {
+      void this.heartbeat(lease, leaseSecs)
+        .then((status) => {
+          if (status !== "running") leaseLost = true;
+        })
+        .catch((err: unknown) => {
+          if ((err as { status?: number }).status === 409) leaseLost = true;
+        });
+    }, Math.max(1, leaseSecs / 2) * 1_000);
+    try {
+      const result = await handler(lease.job);
+      if (!leaseLost) await this.complete(lease, result);
+    } catch (err) {
+      if (!leaseLost) {
+        await this.fail(lease, err instanceof Error ? err.message : String(err)).catch(
+          () => {},
+        );
+      }
+    } finally {
+      clearInterval(ticker);
+    }
   }
 }
 
@@ -229,12 +440,15 @@ export class QueueFlow {
   readonly jobs: JobsResource;
   readonly workflows: WorkflowsResource;
   readonly system: SystemResource;
+  /** Remote worker protocol: lease / heartbeat / complete / fail / run. */
+  readonly worker: WorkerResource;
 
   constructor(options: QueueFlowOptions) {
     this.http = new Http(options);
     this.jobs = new JobsResource(this.http);
     this.workflows = new WorkflowsResource(this.http);
     this.system = new SystemResource(this.http);
+    this.worker = new WorkerResource(this.http);
   }
 
   /** Liveness probe (`GET /health`). */
