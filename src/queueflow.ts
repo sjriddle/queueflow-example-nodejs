@@ -10,6 +10,10 @@ import { QueueFlow } from "@queueflow/sdk";
 export const qf = new QueueFlow({
   baseUrl: process.env.QUEUEFLOW_URL ?? "http://localhost:8000",
   token: process.env.QUEUEFLOW_TOKEN ?? "dev",
+  // Credential for the worker-protocol routes (lease/heartbeat/complete/fail).
+  // Servers started with --worker-token refuse tenant tokens there; in dev
+  // mode (no worker token configured) falling back to the tenant token works.
+  workerToken: process.env.QUEUEFLOW_WORKER_TOKEN,
   // Modest per-request timeout; the SDK retries idempotent calls on 5xx/network.
   timeoutMs: 10_000,
 });

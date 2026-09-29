@@ -22,8 +22,9 @@ client ──POST /signup──▶ Express ──enqueue "welcome email"──�
 > lives in its own repo,
 > [queueflow-core](https://github.com/sjriddle/queueflow-core); this repo
 > is just a client-side example. The Node SDK it uses
-> ([`@queueflow/sdk`](./vendor/queueflow-sdk-nodejs)) is **hand-written** — not
-> code-generated — for an ergonomic developer experience, and targets the same
+> ([`@queueflow/sdk`](./vendor/queueflow-sdk-nodejs)) pairs a spec-generated
+> core with a **hand-written ergonomic facade** (camelCase inputs, waiters,
+> the worker loop, typed errors), built from the same
 > [OpenAPI 3.1 spec](https://github.com/sjriddle/queueflow-core/blob/main/spec/openapi.yaml)
 > the engine serves at `/openapi.json`.
 
@@ -161,6 +162,9 @@ The Express app on `:3000` is just a client. You can also hit the **QueueFlow
 engine** itself — it listens on `--api-port` (default `:8000`, or whatever you
 passed as `API_PORT`). Every `/api/v1/*` route needs a bearer token (any
 non-empty token authenticates on the dev server); the probes and docs don't.
+The worker-protocol routes (lease/heartbeat/complete/fail) are the exception:
+on a server started with `--worker-token`, they require that worker token and
+refuse tenant tokens — set `QUEUEFLOW_WORKER_TOKEN` for this app's worker.
 
 ```bash
 ENGINE=http://localhost:8000          # = http://localhost:$API_PORT
@@ -183,6 +187,8 @@ Full engine surface (all under `/api/v1`, bearer required):
 | `POST /jobs` · `POST /jobs/batch` · `GET /jobs` · `GET /jobs/{id}` · `GET /jobs/{id}/events` (SSE) · `POST /jobs/{id}/cancel` | jobs |
 | `POST /queues/{queue}/lease` · `POST /jobs/{id}/heartbeat` · `POST /jobs/{id}/complete` · `POST /jobs/{id}/fail` | worker (remote worker protocol) |
 | `POST /workflows` · `GET /workflows` · `GET /workflows/{id}` · `POST /workflows/{id}/cancel` · `GET /workflows/{id}/diagram` | workflows |
+| `POST /cron` · `GET /cron` · `GET /cron/{id}` · `DELETE /cron/{id}` · `POST /cron/{id}/pause` · `POST /cron/{id}/resume` | cron schedules |
+| `GET /dlq` · `GET /dlq/{id}` · `POST /dlq/{id}/replay` | dead letters |
 | `GET /tasks` · `GET /stats` | introspection |
 | `GET /health` · `GET /ready` · `GET /docs` · `GET /openapi.json` | probes / docs (no token) |
 
