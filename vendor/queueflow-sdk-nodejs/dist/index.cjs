@@ -1081,6 +1081,12 @@ var JobsApi = class extends BaseAPI {
     if (requestParameters["cursor"] != null) {
       queryParameters["cursor"] = requestParameters["cursor"];
     }
+    if (requestParameters["createdAfter"] != null) {
+      queryParameters["created_after"] = requestParameters["createdAfter"].toISOString();
+    }
+    if (requestParameters["createdBefore"] != null) {
+      queryParameters["created_before"] = requestParameters["createdBefore"].toISOString();
+    }
     const headerParameters = {};
     if (this.configuration && this.configuration.accessToken) {
       const token = this.configuration.accessToken;
@@ -1330,6 +1336,12 @@ var WorkflowsApi = class extends BaseAPI {
     }
     if (requestParameters["cursor"] != null) {
       queryParameters["cursor"] = requestParameters["cursor"];
+    }
+    if (requestParameters["createdAfter"] != null) {
+      queryParameters["created_after"] = requestParameters["createdAfter"].toISOString();
+    }
+    if (requestParameters["createdBefore"] != null) {
+      queryParameters["created_before"] = requestParameters["createdBefore"].toISOString();
     }
     const headerParameters = {};
     if (this.configuration && this.configuration.accessToken) {
@@ -1697,6 +1709,12 @@ var CronApi = class extends BaseAPI {
     if (requestParameters["cursor"] != null) {
       queryParameters["cursor"] = requestParameters["cursor"];
     }
+    if (requestParameters["createdAfter"] != null) {
+      queryParameters["created_after"] = requestParameters["createdAfter"].toISOString();
+    }
+    if (requestParameters["createdBefore"] != null) {
+      queryParameters["created_before"] = requestParameters["createdBefore"].toISOString();
+    }
     const headerParameters = {};
     if (this.configuration && this.configuration.accessToken) {
       const token = this.configuration.accessToken;
@@ -1841,6 +1859,12 @@ var DlqApi = class extends BaseAPI {
     }
     if (requestParameters["cursor"] != null) {
       queryParameters["cursor"] = requestParameters["cursor"];
+    }
+    if (requestParameters["createdAfter"] != null) {
+      queryParameters["created_after"] = requestParameters["createdAfter"].toISOString();
+    }
+    if (requestParameters["createdBefore"] != null) {
+      queryParameters["created_before"] = requestParameters["createdBefore"].toISOString();
     }
     const headerParameters = {};
     if (this.configuration && this.configuration.accessToken) {
@@ -2170,6 +2194,9 @@ function wf(name) {
 }
 
 // src/client.ts
+function toDate(v) {
+  return v === void 0 ? void 0 : v instanceof Date ? v : new Date(v);
+}
 var TERMINAL_JOB_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
 var TERMINAL_WORKFLOW_STATUSES = /* @__PURE__ */ new Set([
   "completed",
@@ -2279,7 +2306,9 @@ var JobsResource = class {
           offset: opts.offset,
           orderBy: opts.orderBy,
           includeTotal: opts.includeTotal,
-          cursor: opts.cursor
+          cursor: opts.cursor,
+          createdAfter: toDate(opts.createdAfter),
+          createdBefore: toDate(opts.createdBefore)
         },
         init
       ),
@@ -2377,7 +2406,9 @@ var WorkflowsResource = class {
           offset: opts.offset,
           orderBy: opts.orderBy,
           includeTotal: opts.includeTotal,
-          cursor: opts.cursor
+          cursor: opts.cursor,
+          createdAfter: toDate(opts.createdAfter),
+          createdBefore: toDate(opts.createdBefore)
         },
         init
       ),
@@ -2598,7 +2629,9 @@ var CronResource = class {
           offset: opts.offset,
           orderBy: opts.orderBy,
           includeTotal: opts.includeTotal,
-          cursor: opts.cursor
+          cursor: opts.cursor,
+          createdAfter: toDate(opts.createdAfter),
+          createdBefore: toDate(opts.createdBefore)
         },
         init
       ),
@@ -2642,7 +2675,9 @@ var DlqResource = class {
           offset: opts.offset,
           orderBy: opts.orderBy,
           includeTotal: opts.includeTotal,
-          cursor: opts.cursor
+          cursor: opts.cursor,
+          createdAfter: toDate(opts.createdAfter),
+          createdBefore: toDate(opts.createdBefore)
         },
         init
       ),

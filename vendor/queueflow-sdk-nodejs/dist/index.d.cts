@@ -1526,6 +1526,10 @@ interface ListOptions {
      * than deep OFFSET paging.
      */
     cursor?: string;
+    /** Only rows created at or after this instant (inclusive). */
+    createdAfter?: Date | string;
+    /** Only rows created strictly before this instant (exclusive). */
+    createdBefore?: Date | string;
 }
 /** Options for the `waitFor` pollers. */
 interface WaitOptions {
